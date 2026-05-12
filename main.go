@@ -39,9 +39,15 @@ func connect_user(conn net.Conn) {
 
 	conn.Write(userByte)
 
+	joinCommand := "JOIN #testServerChannel\r\n"
+	conn.Write([]byte(joinCommand))
+
 	for {
 		status, err := bufio.NewReader(conn).ReadString('\n')
 		fmt.Println(status)
-		fmt.Println(err)
+		if err != nil {
+			fmt.Println(err)
+			break
+		}
 	}
 }
