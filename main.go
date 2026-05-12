@@ -8,7 +8,7 @@ import (
 )
 
 func main() {
-	connect_port("irc.libera.chat", "6667")
+	connect_port("127.0.0.1", "6667")
 }
 
 func connect_port(host string, port string) {
