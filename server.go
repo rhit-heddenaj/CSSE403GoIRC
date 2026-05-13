@@ -35,7 +35,7 @@ func handleConnection(conn net.Conn) {
 	}
 }
 
-func main() {
+func runServer() {
 	ln, err := net.Listen("tcp", ":6667")
 	if err != nil {
 		fmt.Println("Error creating Listener: ", err)
