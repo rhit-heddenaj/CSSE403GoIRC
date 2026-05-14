@@ -4,37 +4,46 @@ import (
 	"bufio"
 	"fmt"
 	"net"
+	"os"
 	"time"
 )
 
 func client() {
-	connectPort("127.0.0.1", "6667")
+	conn := connectPort("127.0.0.1", "6667")
+
+	if conn == nil {
+		return
+	}
+
+	defer conn.Close()
+
+	user := os.Args[2]
+	connectUser(user, conn)
 }
 
-func connectPort(host string, port string) {
+func connectPort(host string, port string) net.Conn {
 	timeout := time.Second
 	conn, err := net.DialTimeout("tcp", net.JoinHostPort(host, port), timeout)
 	if err != nil {
 		fmt.Println("Connecting Error: ", err)
+		return nil
 	}
 	if conn != nil {
-		defer conn.Close()
+
 		fmt.Println("Opened", net.JoinHostPort(host, port))
-		status, err := bufio.NewReader(conn).ReadString('\n')
-		fmt.Println(status)
-		fmt.Println(err)
-		connectUser(conn)
 	}
+
+	return conn
 }
 
-func connectUser(conn net.Conn) {
+func connectUser(username string, conn net.Conn) {
 
-	nickCommand := "NICK testUser\r\n"
+	nickCommand := "NICK " + username + "\r\n"
 	nickByte := []byte(nickCommand)
 
 	conn.Write(nickByte)
 
-	userCommand := "USER testUser * * :Hunter Two\r\n"
+	userCommand := "USER " + username + " * * :Hunter Two\r\n"
 	userByte := []byte(userCommand)
 
 	conn.Write(userByte)
