@@ -128,7 +128,12 @@ func handleLine(client *clientInfo, line string) {
 		handleUser(client, line)
 
 	case "PING":
-		reply(client, fmt.Sprintf("PONG %s\r\n", words[1]))
+		if len(words) < 2 {
+			reply(client, "PONG\r\n")
+			return
+		}
+		msg := strings.Join(words[1:], " ")
+		reply(client, fmt.Sprintf("PONG %s\r\n", msg))
 
 	case "JOIN":
 		if !client.registered {

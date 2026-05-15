@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -19,6 +20,70 @@ func client() {
 
 	user := os.Args[2]
 	connectUser(user, conn)
+
+	go listenServer(conn)
+
+	repl(conn)
+}
+
+func listenServer(conn net.Conn) {
+	reader := bufio.NewReader(conn)
+	for {
+		message, err := reader.ReadString('\n')
+		if err != nil {
+			fmt.Println("Server disconnected:", err)
+			return
+		}
+		fmt.Print("\r" + message)
+		fmt.Print("> ")
+	}
+}
+
+func repl(conn net.Conn) {
+	scanner := bufio.NewScanner(os.Stdin)
+
+	for {
+		fmt.Print("> ")
+		if !scanner.Scan() {
+			break
+		}
+		input := scanner.Text()
+		if input == "" {
+			continue
+		}
+
+		words := strings.Fields(input)
+		switch words[0] {
+		case "PING":
+			if len(words) == 1 {
+				conn.Write([]byte("PING\r\n"))
+				continue
+			}
+
+			msg := strings.Join(words[1:], " ")
+			conn.Write([]byte("PING " + msg + "\r\n"))
+		case "JOIN":
+			if len(words) < 2 {
+				fmt.Println("Usage: JOIN #channel")
+				continue
+			}
+			fmt.Println("Would join:", words[1])
+
+		case "MSG":
+			if len(words) < 3 {
+				fmt.Println("Usage: MSG #channel <message>")
+				continue
+			}
+			msg := strings.Join(words[2:], " ")
+			fmt.Println("Would send to", words[1]+":", msg)
+
+		case "QUIT":
+			return
+
+		default:
+			fmt.Println("Unknown command:", words[0])
+		}
+	}
 }
 
 func connectPort(host string, port string) net.Conn {
@@ -37,26 +102,7 @@ func connectPort(host string, port string) net.Conn {
 }
 
 func connectUser(username string, conn net.Conn) {
-
-	nickCommand := "NICK " + username + "\r\n"
-	nickByte := []byte(nickCommand)
-
-	conn.Write(nickByte)
-
-	userCommand := "USER " + username + " * * :Hunter Two\r\n"
-	userByte := []byte(userCommand)
-
-	conn.Write(userByte)
-
-	joinCommand := "JOIN #testServerChannel\r\n"
-	conn.Write([]byte(joinCommand))
-
-	for {
-		status, err := bufio.NewReader(conn).ReadString('\n')
-		fmt.Println(status)
-		if err != nil {
-			fmt.Println(err)
-			break
-		}
-	}
+	conn.Write([]byte("NICK " + username + "\r\n"))
+	conn.Write([]byte("USER " + username + " * * :Hunter Two\r\n"))
+	conn.Write([]byte("JOIN #testServerChannel\r\n"))
 }
