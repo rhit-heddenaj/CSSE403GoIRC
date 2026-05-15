@@ -75,7 +75,7 @@ func repl(conn net.Conn) {
 				continue
 			}
 			msg := strings.Join(words[2:], " ")
-			fmt.Println("Would send to", words[1]+":", msg)
+			conn.Write([]byte("PRIVMSG " + words[1] + " :" + msg + "\r\n"))
 
 		case "QUIT":
 			return

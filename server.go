@@ -142,9 +142,46 @@ func handleLine(client *clientInfo, line string) {
 		}
 
 		handleJoin(client, words)
+
+	case "PRIVMSG":
+		if !client.registered {
+			reply(client, "You have not registered\r\n")
+			return
+		}
+
+		handleMessage(client, words)
 	}
 
 	tryRegister(client)
+}
+
+func handleMessage(client *clientInfo, words []string) {
+	if len(words) < 3 {
+		reply(client, "PRIVMSG - Not enough parameters\r\n")
+		return
+	}
+
+	channelName := words[1]
+
+	if !strings.HasPrefix(channelName, "#") {
+		reply(client, "Invalid channel name\r\n")
+		return
+	}
+
+	channel, exists := serverState.channels[channelName]
+	if !exists {
+		reply(client, "Channel doesn't exist\r\n")
+		return
+	}
+
+	msg := strings.Join(words[2:], " ")
+	msg = strings.TrimPrefix(msg, ":")
+
+	for _, channelClient := range channel.Members {
+		if channelClient != client {
+			reply(channelClient, fmt.Sprintf("%s: %s\r\n", client.NICK, msg))
+		}
+	}
 }
 
 func tryRegister(client *clientInfo) {
