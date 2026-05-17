@@ -279,6 +279,7 @@ func removeClient(client *clientInfo) {
 
 func runServer() {
 	ln, err := net.Listen("tcp", ":6667")
+	fmt.Println("Server listening on", ln.Addr())
 	if err != nil {
 		fmt.Println(err)
 		return

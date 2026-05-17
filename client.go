@@ -67,7 +67,7 @@ func repl(conn net.Conn) {
 				fmt.Println("Usage: JOIN #channel")
 				continue
 			}
-			fmt.Println("Would join:", words[1])
+			conn.Write([]byte("JOIN " + words[1] + "\r\n"))
 
 		case "MSG":
 			if len(words) < 3 {
