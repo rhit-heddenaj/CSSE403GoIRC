@@ -3,10 +3,13 @@ package main
 import (
 	"bufio"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"strings"
 	"time"
+
+	"github.com/chzyer/readline"
 )
 
 func client() {
@@ -21,12 +24,22 @@ func client() {
 	user := os.Args[2]
 	connectUser(user, conn)
 
-	go listenServer(conn)
+	rl, err := readline.NewEx(&readline.Config{
+		Prompt:                 "> ",
+		DisableAutoSaveHistory: true,
+	})
+	if err != nil {
+		fmt.Println("failed to initialize terminal input:", err)
+		return
+	}
+	defer rl.Close()
 
-	repl(conn)
+	go listenServer(conn, rl)
+
+	repl(conn, rl)
 }
 
-func listenServer(conn net.Conn) {
+func listenServer(conn net.Conn, rl *readline.Instance) {
 	reader := bufio.NewReader(conn)
 	for {
 		message, err := reader.ReadString('\n')
@@ -34,20 +47,24 @@ func listenServer(conn net.Conn) {
 			fmt.Println("Server disconnected:", err)
 			return
 		}
-		fmt.Print("\r" + message)
-		fmt.Print("> ")
+
+		if _, err := rl.Write([]byte(message)); err != nil {
+			fmt.Println("failed to write server output:", err)
+			return
+		}
 	}
 }
 
-func repl(conn net.Conn) {
-	scanner := bufio.NewScanner(os.Stdin)
-
+func repl(conn net.Conn, rl *readline.Instance) {
 	for {
-		fmt.Print("> ")
-		if !scanner.Scan() {
+		input, err := rl.Readline()
+		if err != nil {
+			if err == io.EOF {
+				return
+			}
+			fmt.Println("readline error:", err)
 			break
 		}
-		input := scanner.Text()
 		if input == "" {
 			continue
 		}
@@ -78,7 +95,33 @@ func repl(conn net.Conn) {
 			conn.Write([]byte("PRIVMSG " + words[1] + " :" + msg + "\r\n"))
 
 		case "QUIT":
+			conn.Write([]byte("QUIT\r\n"))
 			return
+
+		case "PART":
+			if len(words) < 2 {
+				fmt.Println("Usage: Part #channel")
+				continue
+			}
+			conn.Write([]byte("PART " + words[1] + "\r\n"))
+
+		case "LIST":
+			conn.Write([]byte("LIST\r\n"))
+
+		case "NAMES":
+			if len(words) < 2 {
+				fmt.Println("Usage: Names #channel")
+				continue
+			}
+			conn.Write([]byte("NAMES " + words[1] + "\r\n"))
+
+		case "TOPIC":
+			if len(words) < 2 {
+				fmt.Println("Usage: TOPIC #channel topic || Usage: TOPIC #channel")
+				continue
+			}
+			msg := strings.Join(words[1:], " ")
+			conn.Write([]byte("TOPIC " + msg + "\r\n"))
 
 		default:
 			fmt.Println("Unknown command:", words[0])

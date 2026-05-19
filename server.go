@@ -26,9 +26,10 @@ type clientInfo struct {
 }
 
 type Channel struct {
-	Name    string
-	Topic   string
-	Members map[string]*clientInfo
+	Name        string
+	Topic       string
+	Members     map[string]*clientInfo
+	CreatorNick string
 }
 
 var serverState = &serverInfo{
@@ -57,6 +58,112 @@ func handleConnection(conn net.Conn) {
 	removeClient(client)
 }
 
+func handleQuit(client *clientInfo, words []string) {
+	if len(words) > 1 {
+		reply(client, "Quit - too many parameters\r\n")
+		return
+	}
+
+	for _, channel := range client.Channels {
+		delete(channel.Members, client.NICK)
+		if len(channel.Members) == 0 {
+			delete(serverState.channels, channel.Name)
+		} else {
+			if channel.CreatorNick == client.NICK {
+				channel.CreatorNick = ""
+			}
+		}
+	}
+
+	delete(serverState.clients, client.NICK)
+	reply(client, "Goodbye!\r\n")
+}
+
+func handleTopic(client *clientInfo, words []string) {
+	if len(words) < 2 {
+		reply(client, "Topic - Not enough parameters\r\n")
+		return
+	}
+
+	channelName := words[1]
+
+	if !strings.HasPrefix(channelName, "#") {
+		reply(client, "Invalid channel name \r\n")
+		return
+	}
+
+	channel, exists := serverState.channels[channelName]
+	if !exists {
+		reply(client, "Channel does not exist \r\n")
+		return
+	}
+
+	if _, exists := channel.Members[client.NICK]; !exists {
+		reply(client, "Can't view topic of a channel you are not a part of\r\n")
+		return
+	}
+
+	if client.NICK == channel.CreatorNick {
+		topic := strings.Join(words[2:], " ")
+		channel.Topic = topic
+		reply(client, "Updated Channel Topic\r\n")
+	} else {
+		reply(client, "TOPIC: "+channel.Topic+"\r\n")
+	}
+}
+
+func handleList(client *clientInfo, words []string) {
+	if len(words) > 1 {
+		reply(client, "List - too many parameters\r\n")
+		return
+	}
+
+	reply(client, "Channel List:\r\n")
+
+	for channelName, channel := range serverState.channels {
+		memberCount := len(channel.Members)
+		reply(client, fmt.Sprintf("%s (%d members)\r\n", channelName, memberCount))
+	}
+
+	reply(client, "End of list\r\n")
+}
+
+func handlePart(client *clientInfo, words []string) {
+	if len(words) < 2 {
+		reply(client, "Part - Not enough parameters\r\n")
+		return
+	}
+
+	channelName := words[1]
+
+	if !strings.HasPrefix(channelName, "#") {
+		reply(client, "Invalid channel name \r\n")
+		return
+	}
+
+	channel, exists := serverState.channels[channelName]
+	if !exists {
+		reply(client, "Channel does not exist \r\n")
+		return
+	}
+
+	if _, exists := channel.Members[client.NICK]; !exists {
+		reply(client, "Can't leave a channel you are not a part of\r\n")
+		return
+	}
+
+	delete(channel.Members, client.NICK)
+	delete(client.Channels, channelName)
+
+	if channel.CreatorNick == client.NICK {
+		channel.CreatorNick = ""
+	}
+
+	if len(channel.Members) == 0 {
+		delete(serverState.channels, channelName)
+	}
+}
+
 func handleJoin(client *clientInfo, words []string) {
 	if len(words) < 2 {
 		reply(client, "JOIN - Not enough parameters\r\n")
@@ -73,8 +180,9 @@ func handleJoin(client *clientInfo, words []string) {
 	channel, exists := serverState.channels[channelName]
 	if !exists {
 		channel = &Channel{
-			Name:    channelName,
-			Members: make(map[string]*clientInfo),
+			Name:        channelName,
+			Members:     make(map[string]*clientInfo),
+			CreatorNick: client.NICK,
 		}
 
 		serverState.channels[channelName] = channel
@@ -94,6 +202,28 @@ func handleJoin(client *clientInfo, words []string) {
 			channelName))
 
 	sendNames(client, channel)
+}
+
+func handleNames(client *clientInfo, words []string) {
+	if len(words) < 2 {
+		reply(client, "Names - Not enough parameters\r\n")
+		return
+	}
+
+	channelName := words[1]
+
+	if !strings.HasPrefix(channelName, "#") {
+		reply(client, "Invalid channel name\r\n")
+		return
+	}
+
+	if channel, exists := serverState.channels[channelName]; exists {
+		sendNames(client, channel)
+		return
+	}
+
+	reply(client, "Channel doesn't exist")
+
 }
 
 func sendNames(client *clientInfo, channel *Channel) {
@@ -150,9 +280,44 @@ func handleLine(client *clientInfo, line string) {
 		}
 
 		handleMessage(client, words)
+
+	case "PART":
+		if !client.registered {
+			reply(client, "You have not registered\r\n")
+			return
+		}
+
+		handlePart(client, words)
+
+	case "QUIT":
+		handleQuit(client, words)
+
+	case "NAMES":
+		if !client.registered {
+			reply(client, "You have not registered\r\n")
+			return
+		}
+
+		handleNames(client, words)
+
+	case "LIST":
+		if !client.registered {
+			reply(client, "You have not registered\r\n")
+			return
+		}
+
+		handleList(client, words)
+
+	case "TOPIC":
+		if !client.registered {
+			reply(client, "You have not registered\r\n")
+			return
+		}
+		handleTopic(client, words)
 	}
 
 	tryRegister(client)
+
 }
 
 func handleMessage(client *clientInfo, words []string) {
@@ -221,21 +386,33 @@ func handleNick(client *clientInfo, words []string) {
 	newNick := words[1]
 
 	existingClient, exists := serverState.clients[newNick]
-
 	if exists && existingClient != client {
 		reply(client, ":Nickname already in use\r\n")
 		return
 	}
 
 	oldNick := client.NICK
+	if oldNick == newNick {
+		return
+	}
 
 	if oldNick != "" {
 		delete(serverState.clients, oldNick)
 	}
 
 	client.NICK = newNick
-
 	serverState.clients[newNick] = client
+
+	for _, channel := range serverState.channels {
+		if channel.CreatorNick == oldNick {
+			channel.CreatorNick = newNick
+		}
+
+		if member, exists := channel.Members[oldNick]; exists {
+			delete(channel.Members, oldNick)
+			channel.Members[newNick] = member
+		}
+	}
 }
 
 func handleUser(client *clientInfo, line string) {
