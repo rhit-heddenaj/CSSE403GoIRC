@@ -18,6 +18,7 @@ const ErrNoSuchChannel = 403
 const ErrNoNicknameGiven = 431
 const ErrNicknameInUse = 433
 const ErrNotOnChannel = 442
+const ErrNotRegistered = 451
 const ErrNeedMoreParams = 461
 
 type serverInfo struct {
@@ -279,7 +280,7 @@ func handleLine(client *clientInfo, line string) {
 
 	case "JOIN":
 		if !client.registered {
-			reply(client, "You have not registered")
+			numericReply(client, ErrNotRegistered, ":You have not registered")
 			return
 		}
 
@@ -287,7 +288,7 @@ func handleLine(client *clientInfo, line string) {
 
 	case "PRIVMSG":
 		if !client.registered {
-			reply(client, "You have not registered")
+			numericReply(client, ErrNotRegistered, ":You have not registered")
 			return
 		}
 
@@ -295,7 +296,7 @@ func handleLine(client *clientInfo, line string) {
 
 	case "PART":
 		if !client.registered {
-			reply(client, "You have not registered")
+			numericReply(client, ErrNotRegistered, ":You have not registered")
 			return
 		}
 
@@ -306,7 +307,7 @@ func handleLine(client *clientInfo, line string) {
 
 	case "NAMES":
 		if !client.registered {
-			reply(client, "You have not registered")
+			numericReply(client, ErrNotRegistered, ":You have not registered")
 			return
 		}
 
@@ -314,7 +315,7 @@ func handleLine(client *clientInfo, line string) {
 
 	case "LIST":
 		if !client.registered {
-			reply(client, "You have not registered")
+			numericReply(client, ErrNotRegistered, ":You have not registered")
 			return
 		}
 
@@ -322,7 +323,7 @@ func handleLine(client *clientInfo, line string) {
 
 	case "TOPIC":
 		if !client.registered {
-			reply(client, "You have not registered")
+			numericReply(client, ErrNotRegistered, ":You have not registered")
 			return
 		}
 		handleTopic(client, words)
