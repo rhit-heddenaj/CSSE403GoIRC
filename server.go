@@ -423,6 +423,7 @@ func handleUser(client *clientInfo, line string) {
 	}
 
 	client.RealName = split[1]
+	client.registered = true
 }
 
 func reply(client *clientInfo, msg string) {

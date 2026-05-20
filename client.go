@@ -13,7 +13,34 @@ import (
 )
 
 func client() {
-	conn := connectPort("127.0.0.1", "6667")
+
+	host := "irc.libera.chat"
+	port := "6667"
+	var username, realName string
+
+	args := os.Args[2:]
+
+	if len(args) < 1 {
+		fmt.Println("Usage: go run . client <nick> [host] [port] [realName]")
+		fmt.Println("Example: go run . client mynick irc.libera.chat 6667 \"My Real Name\"")
+		return
+	}
+
+	username = args[0]
+
+	if len(args) > 1 {
+		host = args[1]
+	}
+	if len(args) > 2 {
+		port = args[2]
+	}
+	if len(args) > 3 {
+		realName = args[3]
+	} else {
+		realName = "Go IRC Client"
+	}
+
+	conn := connectPort(host, port)
 
 	if conn == nil {
 		return
@@ -21,8 +48,7 @@ func client() {
 
 	defer conn.Close()
 
-	user := os.Args[2]
-	connectUser(user, conn)
+	connectUser(username, realName, conn)
 
 	rl, err := readline.NewEx(&readline.Config{
 		Prompt:                 "> ",
@@ -37,6 +63,15 @@ func client() {
 	go listenServer(conn, rl)
 
 	repl(conn, rl)
+}
+
+func isNumeric(s string) bool {
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return len(s) > 0
 }
 
 func listenServer(conn net.Conn, rl *readline.Instance) {
@@ -100,7 +135,7 @@ func repl(conn net.Conn, rl *readline.Instance) {
 
 		case "PART":
 			if len(words) < 2 {
-				fmt.Println("Usage: Part #channel")
+				fmt.Println("Usage: PART #channel")
 				continue
 			}
 			conn.Write([]byte("PART " + words[1] + "\r\n"))
@@ -110,7 +145,7 @@ func repl(conn net.Conn, rl *readline.Instance) {
 
 		case "NAMES":
 			if len(words) < 2 {
-				fmt.Println("Usage: Names #channel")
+				fmt.Println("Usage: NAMES #channel")
 				continue
 			}
 			conn.Write([]byte("NAMES " + words[1] + "\r\n"))
@@ -144,8 +179,7 @@ func connectPort(host string, port string) net.Conn {
 	return conn
 }
 
-func connectUser(username string, conn net.Conn) {
+func connectUser(username string, realName string, conn net.Conn) {
 	conn.Write([]byte("NICK " + username + "\r\n"))
-	conn.Write([]byte("USER " + username + " * * :Hunter Two\r\n"))
-	conn.Write([]byte("JOIN #testServerChannel\r\n"))
+	conn.Write([]byte("USER " + username + " * * :" + realName + "\r\n"))
 }
