@@ -60,7 +60,7 @@ func handleConnection(conn net.Conn) {
 
 func handleQuit(client *clientInfo, words []string) {
 	if len(words) > 1 {
-		reply(client, "Quit - too many parameters\r\n")
+		reply(client, "Quit - too many parameters")
 		return
 	}
 
@@ -76,79 +76,79 @@ func handleQuit(client *clientInfo, words []string) {
 	}
 
 	delete(serverState.clients, client.NICK)
-	reply(client, "Goodbye!\r\n")
+	reply(client, "Goodbye!")
 }
 
 func handleTopic(client *clientInfo, words []string) {
 	if len(words) < 2 {
-		reply(client, "Topic - Not enough parameters\r\n")
+		reply(client, "Topic - Not enough parameters")
 		return
 	}
 
 	channelName := words[1]
 
 	if !strings.HasPrefix(channelName, "#") {
-		reply(client, "Invalid channel name \r\n")
+		reply(client, "Invalid channel name")
 		return
 	}
 
 	channel, exists := serverState.channels[channelName]
 	if !exists {
-		reply(client, "Channel does not exist \r\n")
+		reply(client, "Channel does not exist")
 		return
 	}
 
 	if _, exists := channel.Members[client.NICK]; !exists {
-		reply(client, "Can't view topic of a channel you are not a part of\r\n")
+		reply(client, "Can't view topic of a channel you are not a part of")
 		return
 	}
 
 	if client.NICK == channel.CreatorNick {
 		topic := strings.Join(words[2:], " ")
 		channel.Topic = topic
-		reply(client, "Updated Channel Topic\r\n")
+		reply(client, "Updated Channel Topic")
 	} else {
-		reply(client, "TOPIC: "+channel.Topic+"\r\n")
+		reply(client, "TOPIC: "+channel.Topic)
 	}
 }
 
 func handleList(client *clientInfo, words []string) {
 	if len(words) > 1 {
-		reply(client, "List - too many parameters\r\n")
+		reply(client, "List - too many parameters")
 		return
 	}
 
-	reply(client, "Channel List:\r\n")
+	reply(client, "Channel List:")
 
 	for channelName, channel := range serverState.channels {
 		memberCount := len(channel.Members)
-		reply(client, fmt.Sprintf("%s (%d members)\r\n", channelName, memberCount))
+		reply(client, fmt.Sprintf("%s (%d members)", channelName, memberCount))
 	}
 
-	reply(client, "End of list\r\n")
+	reply(client, "End of list")
 }
 
 func handlePart(client *clientInfo, words []string) {
 	if len(words) < 2 {
-		reply(client, "Part - Not enough parameters\r\n")
+		reply(client, "Part - Not enough parameters")
 		return
 	}
 
 	channelName := words[1]
 
 	if !strings.HasPrefix(channelName, "#") {
-		reply(client, "Invalid channel name \r\n")
+		reply(client, "Invalid channel name")
 		return
 	}
 
 	channel, exists := serverState.channels[channelName]
 	if !exists {
-		reply(client, "Channel does not exist \r\n")
+		reply(client, "Channel does not exist")
 		return
 	}
 
 	if _, exists := channel.Members[client.NICK]; !exists {
-		reply(client, "Can't leave a channel you are not a part of\r\n")
+		reply(client, "Can't leave a channel you are not a part of")
 		return
 	}
 
@@ -166,14 +166,14 @@ func handlePart(client *clientInfo, words []string) {
 
 func handleJoin(client *clientInfo, words []string) {
 	if len(words) < 2 {
-		reply(client, "JOIN - Not enough parameters\r\n")
+		reply(client, "JOIN - Not enough parameters")
 		return
 	}
 
 	channelName := words[1]
 
 	if !strings.HasPrefix(channelName, "#") {
-		reply(client, "Invalid channel name\r\n")
+		reply(client, "Invalid channel name")
 		return
 	}
 
@@ -197,7 +197,7 @@ func handleJoin(client *clientInfo, words []string) {
 	client.Channels[channelName] = channel
 
 	reply(client,
-		fmt.Sprintf("%s JOIN %s\r\n",
+		fmt.Sprintf("%s JOIN %s",
 			client.NICK,
 			channelName))
 
@@ -206,14 +206,14 @@ func handleJoin(client *clientInfo, words []string) {
 
 func handleNames(client *clientInfo, words []string) {
 	if len(words) < 2 {
-		reply(client, "Names - Not enough parameters\r\n")
+		reply(client, "Names - Not enough parameters")
 		return
 	}
 
 	channelName := words[1]
 
 	if !strings.HasPrefix(channelName, "#") {
-		reply(client, "Invalid channel name\r\n")
+		reply(client, "Invalid channel name")
 		return
 	}
 
@@ -234,12 +234,11 @@ func sendNames(client *clientInfo, channel *Channel) {
 	}
 
 	reply(client,
-		fmt.Sprintf("%s :%s\r\n",
+		fmt.Sprintf("%s :%s",
 			channel.Name,
 			strings.Join(names, " ")))
 
-	reply(client,
-		("End of /NAMES list\r\n"))
+	reply(client, "End of /NAMES list")
 }
 
 func handleLine(client *clientInfo, line string) {
@@ -259,15 +258,15 @@ func handleLine(client *clientInfo, line string) {
 
 	case "PING":
 		if len(words) < 2 {
-			reply(client, "PONG\r\n")
+			reply(client, "PONG")
 			return
 		}
 		msg := strings.Join(words[1:], " ")
-		reply(client, fmt.Sprintf("PONG %s\r\n", msg))
+		reply(client, fmt.Sprintf("PONG %s", msg))
 
 	case "JOIN":
 		if !client.registered {
-			reply(client, "You have not registered\r\n")
+			reply(client, "You have not registered")
 			return
 		}
 
@@ -275,7 +274,7 @@ func handleLine(client *clientInfo, line string) {
 
 	case "PRIVMSG":
 		if !client.registered {
-			reply(client, "You have not registered\r\n")
+			reply(client, "You have not registered")
 			return
 		}
 
@@ -283,7 +282,7 @@ func handleLine(client *clientInfo, line string) {
 
 	case "PART":
 		if !client.registered {
-			reply(client, "You have not registered\r\n")
+			reply(client, "You have not registered")
 			return
 		}
 
@@ -294,7 +293,7 @@ func handleLine(client *clientInfo, line string) {
 
 	case "NAMES":
 		if !client.registered {
-			reply(client, "You have not registered\r\n")
+			reply(client, "You have not registered")
 			return
 		}
 
@@ -302,7 +301,7 @@ func handleLine(client *clientInfo, line string) {
 
 	case "LIST":
 		if !client.registered {
-			reply(client, "You have not registered\r\n")
+			reply(client, "You have not registered")
 			return
 		}
 
@@ -310,7 +309,7 @@ func handleLine(client *clientInfo, line string) {
 
 	case "TOPIC":
 		if !client.registered {
-			reply(client, "You have not registered\r\n")
+			reply(client, "You have not registered")
 			return
 		}
 		handleTopic(client, words)
@@ -322,20 +321,20 @@ func handleLine(client *clientInfo, line string) {
 
 func handleMessage(client *clientInfo, words []string) {
 	if len(words) < 3 {
-		reply(client, "PRIVMSG - Not enough parameters\r\n")
+		reply(client, "PRIVMSG - Not enough parameters")
 		return
 	}
 
 	channelName := words[1]
 
 	if !strings.HasPrefix(channelName, "#") {
-		reply(client, "Invalid channel name\r\n")
+		reply(client, "Invalid channel name")
 		return
 	}
 
 	channel, exists := serverState.channels[channelName]
 	if !exists {
-		reply(client, "Channel doesn't exist\r\n")
+		reply(client, "Channel doesn't exist")
 		return
 	}
 
@@ -344,7 +343,7 @@ func handleMessage(client *clientInfo, words []string) {
 
 	for _, channelClient := range channel.Members {
 		if channelClient != client {
-			reply(channelClient, fmt.Sprintf("%s: %s\r\n", client.NICK, msg))
+			reply(channelClient, fmt.Sprintf("%s: %s", client.NICK, msg))
 		}
 	}
 }
@@ -364,8 +363,7 @@ func tryRegister(client *clientInfo) {
 
 	client.registered = true
 
-	reply(client,
-		"Welcome to IRC\r\n")
+	reply(client, "Welcome to IRC")
 }
 
 func checkRegistration(incomingConn net.Conn) bool {
@@ -387,7 +385,7 @@ func handleNick(client *clientInfo, words []string) {
 
 	existingClient, exists := serverState.clients[newNick]
 	if exists && existingClient != client {
-		reply(client, ":Nickname already in use\r\n")
+		reply(client, ":Nickname already in use")
 		return
 	}
 
@@ -423,22 +421,21 @@ func handleUser(client *clientInfo, line string) {
 	}
 
 	client.RealName = split[1]
-	client.registered = true
+	// TODO this breaks it. why.
+	// client.registered = true
 }
 
 func reply(client *clientInfo, msg string) {
 	fmt.Println("send:", msg)
 
-	_, err := client.Conn.Write([]byte(msg))
+	_, err := client.Conn.Write([]byte(msg + "\r\n"))
 	if err != nil {
 		fmt.Println("write error:", err)
 	}
 }
 
 func removeClient(client *clientInfo) {
-
 	for channelName, channel := range client.Channels {
-
 		delete(channel.Members, client.NICK)
 
 		if len(channel.Members) == 0 {
