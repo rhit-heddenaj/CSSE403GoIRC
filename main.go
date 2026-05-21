@@ -18,7 +18,11 @@ func main() {
 
 	switch os.Args[1] {
 	case "server":
-		runServer()
+		runServer("6667")
+	case "server2":
+		runServerOnNetwork("6668", "localhost", "6667")
+	case "server3":
+		runServerOnNetwork("6669", "localhost", "6667")
 	case "client":
 		client()
 	default:

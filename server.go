@@ -30,6 +30,7 @@ const (
 type serverInfo struct {
 	clients  map[string]*clientInfo
 	channels map[string]*Channel
+	servers  map[string]*otherServerInfo
 }
 
 type clientInfo struct {
@@ -43,6 +44,12 @@ type clientInfo struct {
 	registered bool
 }
 
+type otherServerInfo struct {
+	hostname string
+	conn     chan []byte
+	isPeer   bool
+}
+
 type Channel struct {
 	Name        string
 	Topic       string
@@ -53,6 +60,7 @@ type Channel struct {
 var serverState = &serverInfo{
 	clients:  make(map[string]*clientInfo),
 	channels: make(map[string]*Channel),
+	servers:  make(map[string]*otherServerInfo),
 }
 
 func handleConnection(conn net.Conn) {
@@ -62,6 +70,8 @@ func handleConnection(conn net.Conn) {
 
 	scanner.Scan()
 	firstLine := scanner.Text()
+
+	fmt.Println(firstLine)
 
 	connectionType := getConnectionType(firstLine)
 
@@ -94,6 +104,18 @@ func handleClient(firstLine string, scanner *bufio.Scanner, conn net.Conn) {
 	removeClient(client)
 }
 
+func forwardClientLine(client *clientInfo, line string) {
+	if client.RealName == "" {
+		return
+	}
+	formattedLine := fmt.Sprintf(":%s %s", client.NICK, line)
+	for _, server := range serverState.servers {
+		if server.isPeer {
+			server.conn <- []byte(formattedLine)
+		}
+	}
+}
+
 func forwardChannelToConn(channel chan []byte, conn net.Conn) {
 	for {
 		bytes := <-channel
@@ -102,7 +124,65 @@ func forwardChannelToConn(channel chan []byte, conn net.Conn) {
 }
 
 func handleServer(firstLine string, scanner *bufio.Scanner, conn net.Conn) {
+	split := strings.Split(firstLine, " ")
+	hostname := split[1]
 
+	info := &otherServerInfo{
+		hostname: hostname,
+		conn:     make(chan []byte),
+		isPeer:   true,
+	}
+
+	serverState.servers[hostname] = info
+
+	fmt.Println("new server registered")
+
+	go forwardChannelToConn(info.conn, conn)
+
+	for scanner.Scan() {
+		line := scanner.Text()
+
+		handleServerLine(info, line)
+	}
+
+}
+
+func handleServerLine(server *otherServerInfo, line string) {
+	for _, otherServer := range serverState.servers {
+		if otherServer.isPeer && server != otherServer {
+			otherServer.conn <- []byte(line)
+		}
+	}
+
+	if strings.HasPrefix(line, ":") {
+		split := strings.SplitN(line, " ", 2)
+		from := strings.TrimPrefix(split[0], ":")
+		cmd := split[1]
+		client, ok := serverState.clients[from]
+		if ok {
+			handleClientLine(client, cmd)
+		}
+	}
+
+	if strings.HasPrefix(line, "NICK") {
+		split := strings.SplitN(line, " ", 8)
+		client := &clientInfo{
+			Conn:       make(chan []byte),
+			NICK:       split[1],
+			RealName:   split[7],
+			Channels:   make(map[string]*Channel),
+			registered: true,
+		}
+		serverState.clients[client.NICK] = client
+		fmt.Println("new client connected:", client.NICK)
+		go forwardClientMessages(client, server)
+	}
+}
+
+func forwardClientMessages(client *clientInfo, server *otherServerInfo) {
+	for {
+		server.conn <- <-client.Conn
+	}
 }
 
 func handleQuit(client *clientInfo, words []string) {
@@ -467,6 +547,14 @@ func tryRegister(client *clientInfo) {
 	}
 
 	client.registered = true
+	fmt.Println("new client registered")
+
+	for _, server := range serverState.servers {
+		if server.isPeer {
+			fmt.Println("sending to peer")
+			server.conn <- []byte("NICK " + client.NICK + " 0 unused unused unused unused " + client.RealName)
+		}
+	}
 
 	replyNumeric(client, RplWelcome, ":Welcome to IRC")
 }
@@ -589,8 +677,8 @@ func removeClient(client *clientInfo) {
 	fmt.Println("client disconnected:", client.NICK)
 }
 
-func runServer() {
-	ln, err := net.Listen("tcp", ":6667")
+func runServer(port string) {
+	ln, err := net.Listen("tcp", ":"+port)
 	fmt.Println("Server listening on", ln.Addr())
 	if err != nil {
 		fmt.Println(err)
@@ -605,5 +693,30 @@ func runServer() {
 		}
 
 		go handleConnection(conn)
+	}
+}
+
+func runServerOnNetwork(port string, extHost string, extPort string) {
+	go runServer(port)
+	upstreamConn := connectPort(extHost, extPort)
+	defer upstreamConn.Close()
+	upstreamConn.Write([]byte("SERVER localhost:" + port + " 0 0 :a server\r\n"))
+	hostname := extHost + ":" + extPort
+	info := &otherServerInfo{
+		hostname: hostname,
+		conn:     make(chan []byte),
+		isPeer:   true,
+	}
+	serverState.servers[hostname] = info
+	go readUpstream(upstreamConn, info)
+	forwardChannelToConn(info.conn, upstreamConn)
+}
+
+func readUpstream(conn net.Conn, info *otherServerInfo) {
+	scanner := bufio.NewScanner(conn)
+	for scanner.Scan() {
+		line := scanner.Text()
+
+		handleServerLine(info, line)
 	}
 }
