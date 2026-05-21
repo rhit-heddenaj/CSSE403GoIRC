@@ -27,7 +27,7 @@ type serverInfo struct {
 }
 
 type clientInfo struct {
-	Conn net.Conn
+	Conn chan []byte
 
 	NICK     string
 	RealName string
@@ -52,22 +52,51 @@ var serverState = &serverInfo{
 func handleConnection(conn net.Conn) {
 	defer conn.Close()
 
+	scanner := bufio.NewScanner(conn)
+
+	scanner.Scan()
+	firstLine := scanner.Text()
+
+	connectionType := getConnectionType(firstLine)
+
+	switch connectionType {
+	case "client":
+		handleClient(firstLine, scanner, conn)
+	case "server":
+		handleServer(firstLine, scanner, conn)
+	}
+}
+
+func handleClient(firstLine string, scanner *bufio.Scanner, conn net.Conn) {
 	client := &clientInfo{
-		Conn:     conn,
+		Conn:     make(chan []byte),
 		Channels: make(map[string]*Channel),
 	}
 
-	scanner := bufio.NewScanner(conn)
+	go forwardChannelToConn(client.Conn, conn)
+
+	handleClientLine(client, firstLine)
 
 	for scanner.Scan() {
 		line := scanner.Text()
 
 		fmt.Println("recv:", line)
 
-		handleLine(client, line)
+		handleClientLine(client, line)
 	}
 
 	removeClient(client)
+}
+
+func forwardChannelToConn(channel chan []byte, conn net.Conn) {
+	for {
+		bytes := <-channel
+		conn.Write(bytes)
+	}
+}
+
+func handleServer(firstLine string, scanner *bufio.Scanner, conn net.Conn) {
+
 }
 
 func handleQuit(client *clientInfo, words []string) {
@@ -255,7 +284,26 @@ func sendNames(client *clientInfo, channel *Channel) {
 	numericReply(client, RplEndOfNames, ":End of /NAMES list")
 }
 
-func handleLine(client *clientInfo, line string) {
+func getConnectionType(line string) string {
+	words := strings.Fields(line)
+
+	if len(words) == 0 {
+		return "client"
+	}
+
+	switch words[0] {
+	case "NICK":
+		return "client"
+
+	case "SERVER":
+		return "server"
+
+	default:
+		return "client"
+	}
+}
+
+func handleClientLine(client *clientInfo, line string) {
 	words := strings.Fields(line)
 
 	if len(words) == 0 {
@@ -380,15 +428,15 @@ func tryRegister(client *clientInfo) {
 	numericReply(client, RplWelcome, ":Welcome to IRC")
 }
 
-func checkRegistration(incomingConn net.Conn) bool {
-	for _, client := range serverState.clients {
-		if incomingConn == client.Conn {
-			return true
-		}
-	}
+// func checkRegistration(incomingConn net.Conn) bool {
+// 	for _, client := range serverState.clients {
+// 		if incomingConn == client.Conn {
+// 			return true
+// 		}
+// 	}
 
-	return false
-}
+// 	return false
+// }
 
 func handleNick(client *clientInfo, words []string) {
 	if len(words) < 2 {
@@ -447,10 +495,7 @@ func numericReply(client *clientInfo, num uint16, msg string) {
 func reply(client *clientInfo, msg string) {
 	fmt.Println("send:", msg)
 
-	_, err := client.Conn.Write([]byte(msg + "\r\n"))
-	if err != nil {
-		fmt.Println("write error:", err)
-	}
+	client.Conn <- ([]byte(msg + "\r\n"))
 }
 
 func removeClient(client *clientInfo) {
@@ -465,8 +510,6 @@ func removeClient(client *clientInfo) {
 	if client.NICK != "" {
 		delete(serverState.clients, client.NICK)
 	}
-
-	client.Conn.Close()
 
 	fmt.Println("client disconnected:", client.NICK)
 }
