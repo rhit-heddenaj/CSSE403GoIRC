@@ -7,19 +7,25 @@ import (
 	"strings"
 )
 
-const RplWelcome = 1
-const RplListStart = 321
-const RplList = 322
-const RplListEnd = 323
-const RplTopic = 332
-const RplNamReply = 353
-const RplEndOfNames = 366
-const ErrNoSuchChannel = 403
-const ErrNoNicknameGiven = 431
-const ErrNicknameInUse = 433
-const ErrNotOnChannel = 442
-const ErrNotRegistered = 451
-const ErrNeedMoreParams = 461
+const (
+	ServerName          = "localhost"
+	RplWelcome          = 1
+	RplListStart        = 321
+	RplList             = 322
+	RplListEnd          = 323
+	RplNoTopic          = 331
+	RplTopic            = 332
+	RplNameReply        = 353
+	RplEndOfNames       = 366
+	ErrNoSuchChan       = 403
+	ErrCannotSendToChan = 404
+	ErrUnknownCommand   = 421
+	ErrNotOnChan        = 442
+	ErrNotRegistered    = 451
+	ErrNeedMoreParams   = 461
+	ErrNickInUse        = 433
+	ErrBadChanMask      = 479
+)
 
 type serverInfo struct {
 	clients  map[string]*clientInfo
@@ -100,102 +106,116 @@ func handleServer(firstLine string, scanner *bufio.Scanner, conn net.Conn) {
 }
 
 func handleQuit(client *clientInfo, words []string) {
+	quitMsg := ""
 	if len(words) > 1 {
-		reply(client, "Quit - too many parameters")
-		return
+		quitMsg = strings.TrimPrefix(strings.Join(words[1:], " "), ":")
 	}
 
 	for _, channel := range client.Channels {
+		msg := fmt.Sprintf(":%s QUIT", client.NICK)
+		if quitMsg != "" {
+			msg += " :" + quitMsg
+		}
+		msg += "\r\n"
+		for _, member := range channel.Members {
+			if member != client {
+				reply(member, msg)
+			}
+		}
+
 		delete(channel.Members, client.NICK)
 		if len(channel.Members) == 0 {
 			delete(serverState.channels, channel.Name)
-		} else {
-			if channel.CreatorNick == client.NICK {
-				channel.CreatorNick = ""
-			}
+		} else if channel.CreatorNick == client.NICK {
+			channel.CreatorNick = ""
 		}
 	}
 
 	delete(serverState.clients, client.NICK)
-	reply(client, "Goodbye!")
 }
 
 func handleTopic(client *clientInfo, words []string) {
 	if len(words) < 2 {
-		numericReply(client, ErrNeedMoreParams, "TOPIC :Not enough parameters")
+		replyNumeric(client, ErrNeedMoreParams, "TOPIC :Not enough parameters")
 		return
 	}
 
 	channelName := words[1]
 
 	if !strings.HasPrefix(channelName, "#") {
-		numericReply(client, ErrNoSuchChannel, channelName+" :Missing prefix")
+		replyNumeric(client, ErrBadChanMask, fmt.Sprintf("%s :Bad Channel Mask", channelName))
 		return
 	}
 
 	channel, exists := serverState.channels[channelName]
 	if !exists {
-		numericReply(client, ErrNoSuchChannel, channelName+" :Nonexistant channel")
+		replyNumeric(client, ErrNoSuchChan, fmt.Sprintf("%s :No such channel", channelName))
 		return
 	}
 
 	if _, exists := channel.Members[client.NICK]; !exists {
-		numericReply(client, ErrNotOnChannel, channelName+" :Not on channel")
+		replyNumeric(client, ErrNotOnChan, fmt.Sprintf("%s :You're not on that channel", channelName))
 		return
 	}
 
-	if client.NICK == channel.CreatorNick {
-		topic := strings.Join(words[2:], " ")
+	if len(words) >= 3 {
+		topic := strings.TrimPrefix(strings.Join(words[2:], " "), ":")
 		channel.Topic = topic
-		reply(client, "Updated Channel Topic")
-	} else {
-		numericReply(client, RplTopic, channelName+" :"+channel.Topic)
-		// TODO RPL_TOPICWHOTIME
+		for _, member := range channel.Members {
+			reply(member, fmt.Sprintf(":%s TOPIC %s :%s\r\n", client.NICK, channelName, channel.Topic))
+		}
+		return
 	}
+
+	sendTopic(client, channel)
 }
 
 func handleList(client *clientInfo, words []string) {
-	if len(words) > 1 {
-		reply(client, "List - too many parameters")
-		return
-	}
-
-	numericReply(client, RplListStart, "Channel :Users Name")
+	replyNumeric(client, RplListStart, "Channel :Users Name")
 
 	for channelName, channel := range serverState.channels {
 		memberCount := len(channel.Members)
-		numericReply(
-			client,
-			RplList,
-			fmt.Sprintf("%s %d :%s", channelName, memberCount, channel.Topic),
-		)
+		replyNumeric(client, RplList, fmt.Sprintf("%s %d :%s", channelName, memberCount, channel.Topic))
 	}
 
-	numericReply(client, RplListEnd, ":End of /LIST")
+	replyNumeric(client, RplListEnd, ":End of /LIST")
 }
 
 func handlePart(client *clientInfo, words []string) {
 	if len(words) < 2 {
-		numericReply(client, ErrNeedMoreParams, "PART :Not enough parameters")
+		replyNumeric(client, ErrNeedMoreParams, "PART :Not enough parameters")
 		return
 	}
 
 	channelName := words[1]
 
 	if !strings.HasPrefix(channelName, "#") {
-		numericReply(client, ErrNoSuchChannel, channelName+" :Missing prefix")
+		replyNumeric(client, ErrBadChanMask, fmt.Sprintf("%s :Bad Channel Mask", channelName))
 		return
 	}
 
 	channel, exists := serverState.channels[channelName]
 	if !exists {
-		numericReply(client, ErrNoSuchChannel, channelName+" :Nonexistant channel")
+		replyNumeric(client, ErrNoSuchChan, fmt.Sprintf("%s :No such channel", channelName))
 		return
 	}
 
 	if _, exists := channel.Members[client.NICK]; !exists {
-		numericReply(client, ErrNotOnChannel, channelName+" :Not on channel")
+		replyNumeric(client, ErrNotOnChan, fmt.Sprintf("%s :You're not on that channel", channelName))
 		return
+	}
+
+	partMsg := ""
+	if len(words) > 2 {
+		partMsg = strings.TrimPrefix(strings.Join(words[2:], " "), ":")
+	}
+	msg := fmt.Sprintf(":%s PART %s", client.NICK, channelName)
+	if partMsg != "" {
+		msg += " :" + partMsg
+	}
+	msg += "\r\n"
+	for _, member := range channel.Members {
+		reply(member, msg)
 	}
 
 	delete(channel.Members, client.NICK)
@@ -212,14 +232,14 @@ func handlePart(client *clientInfo, words []string) {
 
 func handleJoin(client *clientInfo, words []string) {
 	if len(words) < 2 {
-		numericReply(client, ErrNeedMoreParams, "JOIN :Not enough parameters")
+		replyNumeric(client, ErrNeedMoreParams, "JOIN :Not enough parameters")
 		return
 	}
 
 	channelName := words[1]
 
 	if !strings.HasPrefix(channelName, "#") {
-		numericReply(client, ErrNoSuchChannel, channelName+" :Missing prefix")
+		replyNumeric(client, ErrBadChanMask, fmt.Sprintf("%s :Bad Channel Mask", channelName))
 		return
 	}
 
@@ -242,30 +262,34 @@ func handleJoin(client *clientInfo, words []string) {
 
 	client.Channels[channelName] = channel
 
-	reply(client, fmt.Sprintf("%s JOIN %s", client.NICK, channelName))
-	numericReply(client, RplTopic, channelName+" :"+channel.Topic)
+	joinMsg := fmt.Sprintf(":%s JOIN %s\r\n", client.NICK, channelName)
+	for _, member := range channel.Members {
+		reply(member, joinMsg)
+	}
 
+	sendTopic(client, channel)
 	sendNames(client, channel)
 }
 
 func handleNames(client *clientInfo, words []string) {
 	if len(words) < 2 {
-		numericReply(client, ErrNeedMoreParams, "NAMES :Not enough parameters")
+		replyNumeric(client, ErrNeedMoreParams, "NAMES :Not enough parameters")
 		return
 	}
 
 	channelName := words[1]
 
 	if !strings.HasPrefix(channelName, "#") {
-		numericReply(client, ErrNoSuchChannel, channelName+" :Missing prefix")
+		replyNumeric(client, ErrBadChanMask, fmt.Sprintf("%s :Bad Channel Mask", channelName))
 		return
 	}
 
 	if channel, exists := serverState.channels[channelName]; exists {
 		sendNames(client, channel)
-	} else {
-		numericReply(client, ErrNoSuchChannel, channelName+" :Nonexistant channel")
+		return
 	}
+
+	replyNumeric(client, ErrNoSuchChan, fmt.Sprintf("%s :No such channel", channelName))
 }
 
 func sendNames(client *clientInfo, channel *Channel) {
@@ -275,13 +299,8 @@ func sendNames(client *clientInfo, channel *Channel) {
 		names = append(names, nick)
 	}
 
-	numericReply(
-		client,
-		RplNamReply,
-		"= "+channel.Name+" :"+strings.Join(names, " "),
-	)
-
-	numericReply(client, RplEndOfNames, ":End of /NAMES list")
+	replyNumeric(client, RplNameReply, fmt.Sprintf("= %s :%s", channel.Name, strings.Join(names, " ")))
+	replyNumeric(client, RplEndOfNames, fmt.Sprintf("%s :End of /NAMES list", channel.Name))
 }
 
 func getConnectionType(line string) string {
@@ -320,15 +339,31 @@ func handleClientLine(client *clientInfo, line string) {
 
 	case "PING":
 		if len(words) < 2 {
-			reply(client, "PONG")
+			reply(client, "PONG\r\n")
 			return
 		}
 		msg := strings.Join(words[1:], " ")
-		reply(client, fmt.Sprintf("PONG %s", msg))
+		reply(client, fmt.Sprintf("PONG %s\r\n", msg))
+
+	case "CAP":
+		if len(words) >= 2 {
+			switch words[1] {
+			case "LS":
+				reply(client, fmt.Sprintf(":%s CAP * LS :\r\n", ServerName))
+			case "REQ":
+				req := ""
+				if len(words) > 2 {
+					req = strings.TrimPrefix(strings.Join(words[2:], " "), ":")
+				}
+				reply(client, fmt.Sprintf(":%s CAP * NAK :%s\r\n", ServerName, req))
+			case "END":
+				// ignore, not implemented
+			}
+		}
 
 	case "JOIN":
 		if !client.registered {
-			numericReply(client, ErrNotRegistered, ":You have not registered")
+			replyNumeric(client, ErrNotRegistered, ":You have not registered")
 			return
 		}
 
@@ -336,7 +371,7 @@ func handleClientLine(client *clientInfo, line string) {
 
 	case "PRIVMSG":
 		if !client.registered {
-			numericReply(client, ErrNotRegistered, ":You have not registered")
+			replyNumeric(client, ErrNotRegistered, ":You have not registered")
 			return
 		}
 
@@ -344,7 +379,7 @@ func handleClientLine(client *clientInfo, line string) {
 
 	case "PART":
 		if !client.registered {
-			numericReply(client, ErrNotRegistered, ":You have not registered")
+			replyNumeric(client, ErrNotRegistered, ":You have not registered")
 			return
 		}
 
@@ -355,7 +390,7 @@ func handleClientLine(client *clientInfo, line string) {
 
 	case "NAMES":
 		if !client.registered {
-			numericReply(client, ErrNotRegistered, ":You have not registered")
+			replyNumeric(client, ErrNotRegistered, ":You have not registered")
 			return
 		}
 
@@ -363,7 +398,7 @@ func handleClientLine(client *clientInfo, line string) {
 
 	case "LIST":
 		if !client.registered {
-			numericReply(client, ErrNotRegistered, ":You have not registered")
+			replyNumeric(client, ErrNotRegistered, ":You have not registered")
 			return
 		}
 
@@ -371,10 +406,13 @@ func handleClientLine(client *clientInfo, line string) {
 
 	case "TOPIC":
 		if !client.registered {
-			numericReply(client, ErrNotRegistered, ":You have not registered")
+			replyNumeric(client, ErrNotRegistered, ":You have not registered")
 			return
 		}
 		handleTopic(client, words)
+
+	default:
+		replyNumeric(client, ErrUnknownCommand, fmt.Sprintf("%s :Unknown command", words[0]))
 	}
 
 	tryRegister(client)
@@ -383,20 +421,25 @@ func handleClientLine(client *clientInfo, line string) {
 
 func handleMessage(client *clientInfo, words []string) {
 	if len(words) < 3 {
-		numericReply(client, ErrNeedMoreParams, "PRIVMSG :Not enough parameters")
+		replyNumeric(client, ErrNeedMoreParams, "PRIVMSG :Not enough parameters")
 		return
 	}
 
 	channelName := words[1]
 
 	if !strings.HasPrefix(channelName, "#") {
-		numericReply(client, ErrNoSuchChannel, channelName+" :Missing prefix")
+		replyNumeric(client, ErrBadChanMask, fmt.Sprintf("%s :Bad Channel Mask", channelName))
 		return
 	}
 
 	channel, exists := serverState.channels[channelName]
 	if !exists {
-		numericReply(client, ErrNoSuchChannel, channelName+" :Nonexistant channel")
+		replyNumeric(client, ErrNoSuchChan, fmt.Sprintf("%s :No such channel", channelName))
+		return
+	}
+
+	if _, exists := channel.Members[client.NICK]; !exists {
+		replyNumeric(client, ErrCannotSendToChan, fmt.Sprintf("%s :Cannot send to channel", channelName))
 		return
 	}
 
@@ -405,7 +448,7 @@ func handleMessage(client *clientInfo, words []string) {
 
 	for _, channelClient := range channel.Members {
 		if channelClient != client {
-			reply(channelClient, fmt.Sprintf("%s: %s", client.NICK, msg))
+			reply(channelClient, fmt.Sprintf(":%s PRIVMSG %s :%s\r\n", client.NICK, channelName, msg))
 		}
 	}
 }
@@ -425,7 +468,7 @@ func tryRegister(client *clientInfo) {
 
 	client.registered = true
 
-	numericReply(client, RplWelcome, ":Welcome to IRC")
+	replyNumeric(client, RplWelcome, ":Welcome to IRC")
 }
 
 // func checkRegistration(incomingConn net.Conn) bool {
@@ -440,7 +483,7 @@ func tryRegister(client *clientInfo) {
 
 func handleNick(client *clientInfo, words []string) {
 	if len(words) < 2 {
-		numericReply(client, ErrNoNicknameGiven, ":No nickname given")
+		replyNumeric(client, ErrNeedMoreParams, "NICK :Not enough parameters")
 		return
 	}
 
@@ -448,7 +491,7 @@ func handleNick(client *clientInfo, words []string) {
 
 	existingClient, exists := serverState.clients[newNick]
 	if exists && existingClient != client {
-		numericReply(client, ErrNicknameInUse, ":Nickname is already in use")
+		replyNumeric(client, ErrNickInUse, fmt.Sprintf("%s :Nickname is already in use", newNick))
 		return
 	}
 
@@ -464,6 +507,11 @@ func handleNick(client *clientInfo, words []string) {
 	client.NICK = newNick
 	serverState.clients[newNick] = client
 
+	if oldNick == "" {
+		return
+	}
+
+	notifyTargets := make(map[*clientInfo]struct{})
 	for _, channel := range serverState.channels {
 		if channel.CreatorNick == oldNick {
 			channel.CreatorNick = newNick
@@ -473,6 +521,15 @@ func handleNick(client *clientInfo, words []string) {
 			delete(channel.Members, oldNick)
 			channel.Members[newNick] = member
 		}
+
+		for _, member := range channel.Members {
+			notifyTargets[member] = struct{}{}
+		}
+	}
+
+	nickMsg := fmt.Sprintf(":%s NICK :%s\r\n", oldNick, newNick)
+	for member := range notifyTargets {
+		reply(member, nickMsg)
 	}
 }
 
@@ -480,22 +537,40 @@ func handleUser(client *clientInfo, line string) {
 	split := strings.SplitN(line, ":", 2)
 
 	if len(split) < 2 {
+		replyNumeric(client, ErrNeedMoreParams, "USER :Not enough parameters")
 		return
 	}
 
 	client.RealName = split[1]
-	// TODO this breaks it. why.
-	// client.registered = true
-}
-
-func numericReply(client *clientInfo, num uint16, msg string) {
-	reply(client, fmt.Sprintf("%03d %s %s", num, client.NICK, msg))
 }
 
 func reply(client *clientInfo, msg string) {
 	fmt.Println("send:", msg)
 
-	client.Conn <- ([]byte(msg + "\r\n"))
+	client.Conn <- ([]byte(msg))
+}
+
+func replyNumeric(client *clientInfo, code int, payload string) {
+	target := client.NICK
+	if target == "" {
+		target = "*"
+	}
+
+	if payload == "" {
+		reply(client, fmt.Sprintf(":%s %03d %s\r\n", ServerName, code, target))
+		return
+	}
+
+	reply(client, fmt.Sprintf(":%s %03d %s %s\r\n", ServerName, code, target, payload))
+}
+
+func sendTopic(client *clientInfo, channel *Channel) {
+	if channel.Topic == "" {
+		replyNumeric(client, RplNoTopic, fmt.Sprintf("%s :No topic is set", channel.Name))
+		return
+	}
+
+	replyNumeric(client, RplTopic, fmt.Sprintf("%s :%s", channel.Name, channel.Topic))
 }
 
 func removeClient(client *clientInfo) {
