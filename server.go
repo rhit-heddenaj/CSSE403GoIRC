@@ -41,7 +41,8 @@ type clientInfo struct {
 
 	Channels map[string]*Channel
 
-	registered bool
+	registered  bool
+	isLocalUser bool
 }
 
 type otherServerInfo struct {
@@ -85,8 +86,9 @@ func handleConnection(conn net.Conn) {
 
 func handleClient(firstLine string, scanner *bufio.Scanner, conn net.Conn) {
 	client := &clientInfo{
-		Conn:     make(chan []byte),
-		Channels: make(map[string]*Channel),
+		Conn:        make(chan []byte),
+		Channels:    make(map[string]*Channel),
+		isLocalUser: true,
 	}
 
 	go forwardChannelToConn(client.Conn, conn)
@@ -169,11 +171,12 @@ func handleServerLine(server *otherServerInfo, line string) {
 	if strings.HasPrefix(line, "NICK") {
 		split := strings.SplitN(line, " ", 8)
 		client := &clientInfo{
-			Conn:       make(chan []byte),
-			NICK:       split[1],
-			RealName:   split[7],
-			Channels:   make(map[string]*Channel),
-			registered: true,
+			Conn:        make(chan []byte),
+			NICK:        split[1],
+			RealName:    split[7],
+			Channels:    make(map[string]*Channel),
+			registered:  true,
+			isLocalUser: false,
 		}
 		serverState.clients[client.NICK] = client
 		fmt.Println("new client connected:", client.NICK)
@@ -529,7 +532,7 @@ func handleMessage(client *clientInfo, words []string) {
 	msg = strings.TrimPrefix(msg, ":")
 
 	for _, channelClient := range channel.Members {
-		if channelClient != client {
+		if channelClient.isLocalUser && channelClient != client {
 			reply(channelClient, fmt.Sprintf(":%s PRIVMSG %s :%s\r\n", client.NICK, channelName, msg))
 		}
 	}
