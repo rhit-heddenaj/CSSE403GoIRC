@@ -30,17 +30,25 @@ const (
 type serverInfo struct {
 	clients  map[string]*clientInfo
 	channels map[string]*Channel
+	servers  map[string]*otherServerInfo
 }
 
 type clientInfo struct {
-	Conn net.Conn
+	Conn chan []byte
 
 	NICK     string
 	RealName string
 
 	Channels map[string]*Channel
 
-	registered bool
+	registered  bool
+	isLocalUser bool
+}
+
+type otherServerInfo struct {
+	hostname string
+	conn     chan []byte
+	isPeer   bool
 }
 
 type Channel struct {
@@ -53,27 +61,133 @@ type Channel struct {
 var serverState = &serverInfo{
 	clients:  make(map[string]*clientInfo),
 	channels: make(map[string]*Channel),
+	servers:  make(map[string]*otherServerInfo),
 }
 
 func handleConnection(conn net.Conn) {
 	defer conn.Close()
 
+	scanner := bufio.NewScanner(conn)
+
+	scanner.Scan()
+	firstLine := scanner.Text()
+
+	fmt.Println(firstLine)
+
+	connectionType := getConnectionType(firstLine)
+
+	switch connectionType {
+	case "client":
+		handleClient(firstLine, scanner, conn)
+	case "server":
+		handleServer(firstLine, scanner, conn)
+	}
+}
+
+func handleClient(firstLine string, scanner *bufio.Scanner, conn net.Conn) {
 	client := &clientInfo{
-		Conn:     conn,
-		Channels: make(map[string]*Channel),
+		Conn:        make(chan []byte),
+		Channels:    make(map[string]*Channel),
+		isLocalUser: true,
 	}
 
-	scanner := bufio.NewScanner(conn)
+	go forwardChannelToConn(client.Conn, conn)
+
+	handleClientLine(client, firstLine)
 
 	for scanner.Scan() {
 		line := scanner.Text()
 
 		fmt.Println("recv:", line)
 
-		handleLine(client, line)
+		forwardClientLine(client, line)
+		handleClientLine(client, line)
 	}
 
 	removeClient(client)
+}
+
+func forwardClientLine(client *clientInfo, line string) {
+	if client.RealName == "" {
+		return
+	}
+	formattedLine := fmt.Sprintf(":%s %s", client.NICK, line)
+	for _, server := range serverState.servers {
+		if server.isPeer {
+			server.conn <- []byte(formattedLine)
+		}
+	}
+}
+
+func forwardChannelToConn(channel chan []byte, conn net.Conn) {
+	for {
+		bytes := <-channel
+		finalBytes := []byte(string(bytes) + "\r\n")
+		conn.Write(finalBytes)
+	}
+}
+
+func handleServer(firstLine string, scanner *bufio.Scanner, conn net.Conn) {
+	split := strings.Split(firstLine, " ")
+	hostname := split[1]
+
+	info := &otherServerInfo{
+		hostname: hostname,
+		conn:     make(chan []byte),
+		isPeer:   true,
+	}
+
+	serverState.servers[hostname] = info
+
+	fmt.Println("new server registered")
+
+	go forwardChannelToConn(info.conn, conn)
+
+	for scanner.Scan() {
+		line := scanner.Text()
+
+		handleServerLine(info, line)
+	}
+
+}
+
+func handleServerLine(server *otherServerInfo, line string) {
+	for _, otherServer := range serverState.servers {
+		if otherServer.isPeer && server != otherServer {
+			otherServer.conn <- []byte(line)
+		}
+	}
+
+	if strings.HasPrefix(line, ":") {
+		split := strings.SplitN(line, " ", 2)
+		from := strings.TrimPrefix(split[0], ":")
+		cmd := split[1]
+		client, ok := serverState.clients[from]
+		if ok {
+			handleClientLine(client, cmd)
+		}
+	}
+
+	if strings.HasPrefix(line, "NICK") {
+		split := strings.SplitN(line, " ", 8)
+		client := &clientInfo{
+			Conn:        make(chan []byte),
+			NICK:        split[1],
+			RealName:    split[7],
+			Channels:    make(map[string]*Channel),
+			registered:  true,
+			isLocalUser: false,
+		}
+		serverState.clients[client.NICK] = client
+		fmt.Println("new client connected:", client.NICK)
+		go forwardClientMessages(client, server)
+	}
+}
+
+func forwardClientMessages(client *clientInfo, server *otherServerInfo) {
+	for {
+		server.conn <- []byte(string(<-client.Conn) + "\r\n")
+	}
 }
 
 func handleQuit(client *clientInfo, words []string) {
@@ -274,7 +388,26 @@ func sendNames(client *clientInfo, channel *Channel) {
 	replyNumeric(client, RplEndOfNames, fmt.Sprintf("%s :End of /NAMES list", channel.Name))
 }
 
-func handleLine(client *clientInfo, line string) {
+func getConnectionType(line string) string {
+	words := strings.Fields(line)
+
+	if len(words) == 0 {
+		return "client"
+	}
+
+	switch words[0] {
+	case "NICK":
+		return "client"
+
+	case "SERVER":
+		return "server"
+
+	default:
+		return "client"
+	}
+}
+
+func handleClientLine(client *clientInfo, line string) {
 	words := strings.Fields(line)
 
 	if len(words) == 0 {
@@ -399,7 +532,7 @@ func handleMessage(client *clientInfo, words []string) {
 	msg = strings.TrimPrefix(msg, ":")
 
 	for _, channelClient := range channel.Members {
-		if channelClient != client {
+		if channelClient.isLocalUser && channelClient != client {
 			reply(channelClient, fmt.Sprintf(":%s PRIVMSG %s :%s\r\n", client.NICK, channelName, msg))
 		}
 	}
@@ -419,19 +552,27 @@ func tryRegister(client *clientInfo) {
 	}
 
 	client.registered = true
+	fmt.Println("new client registered")
+
+	for _, server := range serverState.servers {
+		if server.isPeer {
+			fmt.Println("sending to peer")
+			server.conn <- []byte("NICK " + client.NICK + " 0 unused unused unused unused " + client.RealName)
+		}
+	}
 
 	replyNumeric(client, RplWelcome, ":Welcome to IRC")
 }
 
-func checkRegistration(incomingConn net.Conn) bool {
-	for _, client := range serverState.clients {
-		if incomingConn == client.Conn {
-			return true
-		}
-	}
+// func checkRegistration(incomingConn net.Conn) bool {
+// 	for _, client := range serverState.clients {
+// 		if incomingConn == client.Conn {
+// 			return true
+// 		}
+// 	}
 
-	return false
-}
+// 	return false
+// }
 
 func handleNick(client *clientInfo, words []string) {
 	if len(words) < 2 {
@@ -499,10 +640,7 @@ func handleUser(client *clientInfo, line string) {
 func reply(client *clientInfo, msg string) {
 	fmt.Println("send:", msg)
 
-	_, err := client.Conn.Write([]byte(msg))
-	if err != nil {
-		fmt.Println("write error:", err)
-	}
+	client.Conn <- ([]byte(msg))
 }
 
 func replyNumeric(client *clientInfo, code int, payload string) {
@@ -541,13 +679,11 @@ func removeClient(client *clientInfo) {
 		delete(serverState.clients, client.NICK)
 	}
 
-	client.Conn.Close()
-
 	fmt.Println("client disconnected:", client.NICK)
 }
 
-func runServer() {
-	ln, err := net.Listen("tcp", ":6667")
+func runServer(port string) {
+	ln, err := net.Listen("tcp", ":"+port)
 	fmt.Println("Server listening on", ln.Addr())
 	if err != nil {
 		fmt.Println(err)
@@ -562,5 +698,30 @@ func runServer() {
 		}
 
 		go handleConnection(conn)
+	}
+}
+
+func runServerOnNetwork(port string, extHost string, extPort string) {
+	go runServer(port)
+	upstreamConn := connectPort(extHost, extPort)
+	defer upstreamConn.Close()
+	upstreamConn.Write([]byte("SERVER localhost:" + port + " 0 0 :a server\r\n"))
+	hostname := extHost + ":" + extPort
+	info := &otherServerInfo{
+		hostname: hostname,
+		conn:     make(chan []byte),
+		isPeer:   true,
+	}
+	serverState.servers[hostname] = info
+	go readUpstream(upstreamConn, info)
+	forwardChannelToConn(info.conn, upstreamConn)
+}
+
+func readUpstream(conn net.Conn, info *otherServerInfo) {
+	scanner := bufio.NewScanner(conn)
+	for scanner.Scan() {
+		line := scanner.Text()
+
+		handleServerLine(info, line)
 	}
 }
