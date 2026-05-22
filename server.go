@@ -98,6 +98,7 @@ func handleClient(firstLine string, scanner *bufio.Scanner, conn net.Conn) {
 
 		fmt.Println("recv:", line)
 
+		forwardClientLine(client, line)
 		handleClientLine(client, line)
 	}
 
@@ -119,7 +120,8 @@ func forwardClientLine(client *clientInfo, line string) {
 func forwardChannelToConn(channel chan []byte, conn net.Conn) {
 	for {
 		bytes := <-channel
-		conn.Write(bytes)
+		finalBytes := []byte(string(bytes) + "\r\n")
+		conn.Write(finalBytes)
 	}
 }
 
@@ -181,7 +183,7 @@ func handleServerLine(server *otherServerInfo, line string) {
 
 func forwardClientMessages(client *clientInfo, server *otherServerInfo) {
 	for {
-		server.conn <- <-client.Conn
+		server.conn <- []byte(string(<-client.Conn) + "\r\n")
 	}
 }
 
